@@ -13,19 +13,19 @@ This bot is designed to help users retrieve and forward messages from Telegram c
 
 1. **Clone the repository:**
 
-    `bash
-    git clone https://github.com/your-username/message_viewer_bot.git
-    cd message_viewer_bot`
+    ```bash
+    git clone https://github.com/harashimahashi/message_viewer_bot.git
+    cd message_viewer_bot
 
 2. **Set up your environment variables:**
 
 
     Create a .env file in the root directory of the project and add your environment variables:
 
-    `env
+    ```env
     BOT_TOKEN=your-bot-token
     API_ID=your-api-id
-    API_HASH=your-api-hash`
+    API_HASH=your-api-hash
 
 3. **Install dependencies:**
 
@@ -62,6 +62,10 @@ Forward a thread of replies or a specific message.
 Forward a sequence of messages.
 - **Usage:** Forward a series of `n` messages starting from the specified message ID. Messages will be sent to your private chat. Max count is 100 to avoid rate limiting.
 - **Example:** `/forward_n 123456 10` or `/forward_n channelname 123456 10`
+
+#### `/forwrand`
+Forwards random message from chat.
+- **Usage:** Just send command in the chat and the bot will reply with random message from the chat. Rate limited, 2 forwrands/15s
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.

@@ -4,10 +4,12 @@ from telegram.error import RetryAfter
 from telegram.constants import ParseMode
 from telethon import TelegramClient
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 import logging
 import traceback
 import asyncio
 import os
+import random
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,6 +21,12 @@ api_id = os.getenv("API_ID")
 api_hash = os.getenv("API_HASH")
 
 client = TelegramClient('bot_session', api_id, api_hash)
+
+chat_cooldowns = {}
+
+COOLDOWN_DURATION = timedelta(seconds=15)
+
+MAX_USES_BEFORE_COOLDOWN = 2
 
 async def forward_command(update: Update, context: CallbackContext) -> None:
     args = context.args
@@ -64,14 +72,11 @@ async def forward_reply_command(update: Update, context: CallbackContext) -> Non
         return
 
     reply_to_message_id = update.message.reply_to_message.message_id
-
     await client.start()
 
     try:
         # Fetch the message the replied-to message is replying to
         message = await client.get_messages(update.message.chat_id, ids=reply_to_message_id)
-
-        logger.error(message);
 
         if message.reply_to:
             original_message_id = message.reply_to.reply_to_msg_id
@@ -211,6 +216,67 @@ async def forward_n_command(update: Update, context: CallbackContext) -> None:
     finally:
         await client.disconnect()    
 
+async def forwrand_command(update: Update, context: CallbackContext) -> None:
+    chat_id = update.message.chat_id
+
+    now = datetime.now()
+
+    if chat_id not in chat_cooldowns:
+        chat_cooldowns[chat_id] = {'count': 0, 'cooldown_expiry': now + COOLDOWN_DURATION}
+
+    chat_info = chat_cooldowns[chat_id]
+    count = chat_info['count']
+    cooldown_expiry = chat_info['cooldown_expiry']
+
+    # Check if the chat is currently throttled
+    if now < cooldown_expiry and count >= MAX_USES_BEFORE_COOLDOWN:
+        return
+
+    await client.start()
+
+    try:
+        # Get the last message in the chat
+        last_message = await client.get_messages(chat_id, limit=1)
+
+        if not last_message:
+            await update.message.reply_text("No messages found in this chat.")
+            return
+
+        last_message_id = last_message[0].id
+
+        success = False
+        attempt = 0
+        MAX_FORWRAND_RETRIES = 5
+
+        while not success:
+            random_message_id = random.randint(2, last_message_id)
+            attempt += 1
+
+            try:
+                await context.bot.forward_message(
+                    chat_id=update.message.chat_id,
+                    from_chat_id=chat_id,
+                    message_id=random_message_id
+                )
+                success = True
+
+            except Exception as e:
+                if attempt >= MAX_FORWRAND_RETRIES:
+                    raise
+
+        chat_cooldowns[chat_id]['count'] += 1
+
+        if datetime.now() > cooldown_expiry and chat_cooldowns[chat_id]['count'] >= MAX_USES_BEFORE_COOLDOWN:
+            chat_cooldowns[chat_id]['cooldown_expiry'] = now + COOLDOWN_DURATION
+            chat_cooldowns[chat_id]['count'] = 1
+
+    except Exception as e:
+        logger.error(f"Error processing forwrand_command: {e}")
+        logger.error(traceback.format_exc())
+        await update.message.reply_text(f"An error occurred: {str(e)}")
+    finally:
+        await client.disconnect()
+
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text('Hi! Please add me to the chat or channel to be able to forward messages from it.')
 
@@ -232,13 +298,17 @@ Welcome to your message forwarding assistant\! Below are the commands you can us
 
 /forward\_thread \[\[<source\_chat\>\] <message\_id\>\]
 \- _Forward a thread of replies or a specific message\._
-\- Usage: Forward an entire thread starting from a message ID or the message you replied to\. Messages will be sent to your private chat\.
+\- Usage: Forward an entire thread starting from a message ID or the message you replied to\. Messages will be sent to your private chat\. You need to start the bot for yourself\.
 \- Example: `/forward\_thread 123456` or reply with `/forward\_thread`
 
 /forward\_n \[<source\_chat\>\] <message\_id\> <count\>
 \- _Forward a sequence of messages\._
-\- Usage: Forward a series of `n` messages starting from the specified message ID\. Messages will be sent to your private chat\. Max count is 100 to avoid rate limiting\.
+\- Usage: Forward a series of `n` messages starting from the specified message ID\. Messages will be sent to your private chat\. You need to start the bot for yourself\. Max count is 100 to avoid rate limiting\.
 \- Example: `/forward\_n 123456 10` or `/forward\_n channelname 123456 10`
+
+/forwrand
+\- _Forward a random message from the chat\._
+\- Usage: Just send command in the chat and the bot will reply with random message from the chat\. Rate limited, 2 forwrands/15s\.
 
 If you need further assistance, feel free to reach out \@lazerate\. Happy forwarding\! 🎉
     """
@@ -253,6 +323,7 @@ def main():
     application.add_handler(CommandHandler("forward_reply", forward_reply_command))
     application.add_handler(CommandHandler("forward_thread", forward_thread_command))
     application.add_handler(CommandHandler("forward_n", forward_n_command))
+    application.add_handler(CommandHandler("forwrand", forwrand_command))
 
     application.run_polling()
 
