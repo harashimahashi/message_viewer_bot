@@ -65,7 +65,13 @@ Forward a sequence of messages.
 
 #### `/forwrand`
 Forwards random message from chat.
-- **Usage:** Just send command in the chat and the bot will reply with random message from the chat. Rate limited, 2 forwrands/15s
+- **Usage:** Just send command in the chat and the bot will reply with random message from the chat. Rate limited, 2 forwrands/15s.
+
+#### `/forward_id`
+Replies with forwarded message id.
+- **Usage:** Send in reply to forwarded message.
+
+Commands like `/forward_id`, `/forward_reply`, `/forward_thread`, `/forward_n` will work on messages forwarded by `/forward`, `/forward_reply`, `/forwrand` only for five minutes.
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.

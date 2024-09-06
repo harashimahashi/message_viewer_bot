@@ -10,6 +10,7 @@ import traceback
 import asyncio
 import os
 import random
+import redis
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,14 +20,17 @@ load_dotenv()
 bot_token = os.getenv("BOT_TOKEN")
 api_id = os.getenv("API_ID")
 api_hash = os.getenv("API_HASH")
+redis_host = os.getenv("REDIS_HOST")
 
 client = TelegramClient('bot_session', api_id, api_hash)
+redis_client = redis.StrictRedis(host=redis_host, port=6379, db=0, decode_responses=True)
 
 chat_cooldowns = {}
 
 COOLDOWN_DURATION = timedelta(seconds=15)
 
 MAX_USES_BEFORE_COOLDOWN = 2
+REDIS_TTL=300
 
 async def forward_command(update: Update, context: CallbackContext) -> None:
     args = context.args
@@ -53,11 +57,14 @@ async def forward_command(update: Update, context: CallbackContext) -> None:
             entity = await client.get_entity(source_chat)
             source_chat = "-100" + str(entity.id)
 
-        await context.bot.forward_message(
+        forwarded_message = await context.bot.forward_message(
             chat_id=update.message.chat_id,
             from_chat_id=source_chat,
             message_id=message_id
         )
+
+        redis_key = f"{source_chat}_{forwarded_message.message_id}"
+        redis_client.set(redis_key, message_id, ex=REDIS_TTL)
 
     except Exception as e:
         logger.error(f"Error forwarding message: {e}")
@@ -72,6 +79,12 @@ async def forward_reply_command(update: Update, context: CallbackContext) -> Non
         return
 
     reply_to_message_id = update.message.reply_to_message.message_id
+
+    redis_key = f"{update.message.chat_id}_{reply_to_message_id}"
+    original_message_id = redis_client.get(redis_key)
+    if original_message_id:
+        reply_to_message_id = int(original_message_id)
+
     await client.start()
 
     try:
@@ -82,11 +95,14 @@ async def forward_reply_command(update: Update, context: CallbackContext) -> Non
             original_message_id = message.reply_to.reply_to_msg_id
             source_chat_id = message.chat_id
 
-            await context.bot.forward_message(
+            forwarded_message = await context.bot.forward_message(
                 chat_id=update.message.chat_id,
                 from_chat_id=source_chat_id,
                 message_id=original_message_id
             )
+
+            redis_key = f"{source_chat_id}_{forwarded_message.message_id}"
+            redis_client.set(redis_key, original_message_id, ex=REDIS_TTL)
 
         else:
             await update.message.reply_text('The replied-to message is not a reply to another message.')
@@ -148,6 +164,11 @@ async def forward_thread_command(update: Update, context: CallbackContext) -> No
             entity = await client.get_entity(source_chat_id)
             source_chat_id = int("-100" + str(entity.id))
 
+        redis_key = f"{source_chat_id}_{message_id}"
+        original_message_id = redis_client.get(redis_key)
+        if original_message_id:
+            message_id = int(original_message_id)
+
         await forward_message_with_replies(user_chat_id, source_chat_id, message_id, context);
 
     except Exception as e:
@@ -194,6 +215,11 @@ async def forward_n_command(update: Update, context: CallbackContext) -> None:
         if len(args) == 3:
             entity = await client.get_entity(source_chat_id)
             source_chat_id = int("-100" + str(entity.id))
+
+        redis_key = f"{source_chat_id}_{message_id}"
+        original_message_id = redis_client.get(redis_key)
+        if original_message_id:
+            message_id = int(original_message_id)
 
         for i in range(message_id, message_id + count + 1):
             try:
@@ -253,12 +279,15 @@ async def forwrand_command(update: Update, context: CallbackContext) -> None:
             attempt += 1
 
             try:
-                await context.bot.forward_message(
+                forwarded_message = await context.bot.forward_message(
                     chat_id=update.message.chat_id,
                     from_chat_id=chat_id,
                     message_id=random_message_id
                 )
                 success = True
+
+                redis_key = f"{chat_id}_{forwarded_message.message_id}"
+                redis_client.set(redis_key, random_message_id, ex=REDIS_TTL)
 
             except Exception as e:
                 if attempt >= MAX_FORWRAND_RETRIES:
@@ -276,6 +305,22 @@ async def forwrand_command(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(f"An error occurred: {str(e)}")
     finally:
         await client.disconnect()
+
+async def forward_id_command(update: Update, context: CallbackContext) -> None:
+    if not update.message.reply_to_message:
+        await update.message.reply_text('You need to reply to a message.')
+        return
+
+    reply_to_message_id = update.message.reply_to_message.message_id
+
+    redis_key = f"{update.message.chat_id}_{reply_to_message_id}"
+    original_message_id = redis_client.get(redis_key)
+    if original_message_id:
+        await update.message.reply_text(original_message_id)
+    else:
+        await update.message.reply_text('No message id in cache')
+
+    return
 
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text('Hi! Please add me to the chat or channel to be able to forward messages from it.')
@@ -310,6 +355,12 @@ Welcome to your message forwarding assistant\! Below are the commands you can us
 \- _Forward a random message from the chat\._
 \- Usage: Just send command in the chat and the bot will reply with random message from the chat\. Rate limited, 2 forwrands/15s\.
 
+/forward\_id
+\- _Send original id of forwarded message\._
+\- Usage: Send in reply to forwarded message\.
+
+Commands like `/forward\_id`, `/forward\_reply`, `/forward\_thread`, `/forward\_n` will work on messages forwarded by `/forward`, `/forward\_reply`, `/forwrand` only for five minutes\.
+
 If you need further assistance, feel free to reach out \@lazerate\. Happy forwarding\! 🎉
     """
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2)
@@ -324,6 +375,7 @@ def main():
     application.add_handler(CommandHandler("forward_thread", forward_thread_command))
     application.add_handler(CommandHandler("forward_n", forward_n_command))
     application.add_handler(CommandHandler("forwrand", forwrand_command))
+    application.add_handler(CommandHandler("forward_id", forward_id_command))
 
     application.run_polling()
 
