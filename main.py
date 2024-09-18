@@ -11,9 +11,18 @@ import asyncio
 import os
 import random
 import redis
+import re
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+class SensitiveDataFormatter(logging.Formatter):
+    def __init__(self, token, fmt=None, datefmt=None):
+        super().__init__(fmt, datefmt)
+        self.pattern = re.compile(re.escape(token), re.IGNORECASE) if token else None
+
+    def format(self, record):
+        original_msg = super().format(record)
+        if self.pattern:
+            return self.pattern.sub("[REDACTED]", original_msg)
+        return original_msg
 
 load_dotenv()
 
@@ -21,6 +30,24 @@ bot_token = os.getenv("BOT_TOKEN")
 api_id = os.getenv("API_ID")
 api_hash = os.getenv("API_HASH")
 redis_host = os.getenv("REDIS_HOST")
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+
+formatter = SensitiveDataFormatter(bot_token, '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+logger.addHandler(handler)
+
+httpx_logger = logging.getLogger('httpx')
+httpx_logger.setLevel(logging.INFO)
+httpx_logger.addHandler(handler)
+
+telegram_logger = logging.getLogger('telegram')
+telegram_logger.setLevel(logging.INFO)
+telegram_logger.addHandler(handler)
 
 client = TelegramClient('bot_session', api_id, api_hash)
 redis_client = redis.StrictRedis(host=redis_host, port=6379, db=0, decode_responses=True)
